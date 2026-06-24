@@ -1,0 +1,25 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      PORT: 3000
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      COOKIE_SECRET: ${{ secrets.COOKIE_SECRET }}
+      ADMIN_SECRET: ${{ secrets.ADMIN_SECRET }}
+      TURN_URLS: turn:127.0.0.1:3478
+      TURN_USERNAME: ci
+      TURN_CREDENTIAL: ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
