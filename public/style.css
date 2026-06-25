@@ -81,6 +81,7 @@ body {
 }
 
 .chat-toggle {
+  position: relative;
   width: 40px;
   height: 40px;
   border-radius: 50%;
@@ -91,6 +92,21 @@ body {
   align-items: center;
   justify-content: center;
   touch-action: manipulation;
+}
+
+.unread-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e5484d;
+  border: 2px solid #11131a;
+}
+
+.unread-dot.hidden {
+  display: none;
 }
 
 .chat-toggle:disabled {

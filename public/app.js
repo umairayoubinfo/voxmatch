@@ -1,5 +1,20 @@
 let iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
 
+// Hints, not requirements — unsupported keys (e.g. voiceIsolation on non-Safari
+// browsers) are silently ignored by getUserMedia rather than throwing, since
+// none of these are wrapped in `exact`.
+const AUDIO_CONSTRAINTS = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+  sampleRate: 48000,
+  sampleSize: 16,
+  latency: 0,
+  voiceIsolation: true,
+  suppressLocalAudioPlayback: false,
+};
+
 const statusEl = document.getElementById('status');
 const orb = document.getElementById('orb');
 const remoteAudio = document.getElementById('remoteAudio');
@@ -13,6 +28,7 @@ const speakerBtn = document.getElementById('speakerBtn');
 const reportBtn = document.getElementById('reportBtn');
 const stopBtn = document.getElementById('stopBtn');
 const chatToggleBtn = document.getElementById('chatToggleBtn');
+const unreadDot = document.getElementById('unreadDot');
 const chatPanel = document.getElementById('chatPanel');
 const chatLog = document.getElementById('chatLog');
 const chatForm = document.getElementById('chatForm');
@@ -61,11 +77,22 @@ function resumeAudioContext() {
 
 function routeRemoteStreamThroughGain(stream) {
   if (!audioCtx || !gainNode) return false;
-  if (sourceNode) sourceNode.disconnect();
-  sourceNode = audioCtx.createMediaStreamSource(stream);
-  sourceNode.connect(gainNode);
-  remoteAudio.muted = true; // avoid double playback — the gain graph is the real output path
-  return true;
+  // Mobile browsers aggressively auto-suspend an AudioContext that isn't
+  // actively producing sound — which is exactly the state it's in while
+  // "Searching..." for a match. The resume() at Start time isn't enough if
+  // that takes more than a few seconds, so resume again right before we
+  // actually need output, or the call connects but stays silent.
+  resumeAudioContext();
+  try {
+    if (sourceNode) sourceNode.disconnect();
+    sourceNode = audioCtx.createMediaStreamSource(stream);
+    sourceNode.connect(gainNode);
+    remoteAudio.muted = true; // avoid double playback — the gain graph is the real output path
+    return true;
+  } catch (err) {
+    console.error('Failed to route remote audio through gain node', err);
+    return false;
+  }
 }
 
 function toggleBoost() {
@@ -95,6 +122,7 @@ function setStatus(text, cssClass) {
 function closeChat() {
   chatPanel.classList.add('hidden');
   chatToggleBtn.classList.remove('active');
+  unreadDot.classList.add('hidden');
 }
 
 function showToast(message) {
@@ -106,6 +134,9 @@ function showToast(message) {
 function notifyNewMessage(text) {
   if (chatPanel.classList.contains('hidden')) {
     showToast('New message');
+    // The toast disappears after 2.5s and is easy to miss — leave a badge on
+    // the chat icon too, so an unread message can't go unnoticed.
+    unreadDot.classList.remove('hidden');
   }
   // The in-page toast only helps while this tab is in front. If the tab is
   // backgrounded or the phone is locked, fall back to a real OS notification.
@@ -201,10 +232,35 @@ function playRemoteAudio() {
   }
 }
 
+function preferOpusCodec(peerConnection) {
+  // Opus is already what every modern browser offers first for a plain audio
+  // track, so this mostly guards the rare/older-browser case rather than
+  // changing today's typical negotiation outcome.
+  if (typeof RTCRtpReceiver === 'undefined' || typeof RTCRtpReceiver.getCapabilities !== 'function') return;
+  const capabilities = RTCRtpReceiver.getCapabilities('audio');
+  if (!capabilities) return;
+  const opus = capabilities.codecs.filter((c) => c.mimeType.toLowerCase() === 'audio/opus');
+  const others = capabilities.codecs.filter((c) => c.mimeType.toLowerCase() !== 'audio/opus');
+  if (!opus.length) return;
+  const ordered = [...opus, ...others];
+
+  peerConnection.getTransceivers().forEach((transceiver) => {
+    const kind = transceiver.sender && transceiver.sender.track && transceiver.sender.track.kind;
+    if (kind === 'audio' && typeof transceiver.setCodecPreferences === 'function') {
+      try {
+        transceiver.setCodecPreferences(ordered);
+      } catch (err) {
+        console.error('Failed to set codec preferences', err);
+      }
+    }
+  });
+}
+
 function createPeerConnection(isOfferer) {
   pc = new RTCPeerConnection({ iceServers });
 
   localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+  preferOpusCodec(pc);
 
   pc.onicecandidate = (event) => {
     if (event.candidate) {
@@ -254,6 +310,10 @@ function ensureSocket() {
   socket = io();
 
   socket.on('matched', ({ isOfferer }) => {
+    // Defensive: a stale pc from a previous match should never still be open
+    // here, but if it ever is (server race, reconnect), tear it down first
+    // rather than leaking it while a second one is created alongside it.
+    if (pc) teardownPeerConnection();
     setStatus('Connected. Say hi!', 'connected');
     setControlsForState('connected');
     clearChat();
@@ -320,10 +380,15 @@ async function startSession() {
   }
 
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
   } catch (err) {
-    showToast('Microphone access is required to start.');
-    return;
+    console.error('getUserMedia failed with full constraints, retrying with plain audio', err);
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (fallbackErr) {
+      showToast('Microphone access is required to start.');
+      return;
+    }
   }
   setMuted(false);
 
@@ -393,7 +458,10 @@ chatToggleBtn.addEventListener('click', () => {
   if (chatToggleBtn.disabled) return;
   const isHidden = chatPanel.classList.toggle('hidden');
   chatToggleBtn.classList.toggle('active', !isHidden);
-  if (!isHidden) chatInput.focus();
+  if (!isHidden) {
+    chatInput.focus();
+    unreadDot.classList.add('hidden');
+  }
 });
 consentCheckbox.addEventListener('change', () => {
   localStorage.setItem('vm_consent_accepted', consentCheckbox.checked ? 'true' : 'false');
@@ -411,6 +479,10 @@ chatForm.addEventListener('submit', (event) => {
   socket.emit('chat-message', { text });
   addChatLine(text, 'me');
   chatInput.value = '';
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) resumeAudioContext();
 });
 
 ensureSocket();
