@@ -26,47 +26,54 @@ let pc = null;
 let localStream = null;
 let state = 'idle'; // idle | searching | connected | stopped
 let isMuted = false;
-let isSpeakerOn = false;
-let speakerDeviceId = null;
+let isBoosted = false;
+let audioCtx = null;
+let gainNode = null;
+let sourceNode = null;
+const BOOST_GAIN = 2.5;
 
-function supportsOutputSwitching() {
-  return typeof remoteAudio.setSinkId === 'function' &&
-    !!navigator.mediaDevices &&
-    typeof navigator.mediaDevices.enumerateDevices === 'function';
+// There is no web API to switch a phone's call audio between earpiece and
+// loudspeaker the way native call apps do — browser tabs already play
+// through the main speaker, so a device-switching "speaker" button has
+// nothing real to switch to/from on a phone with no headset connected.
+// What actually has an audible effect everywhere is amplifying the signal
+// past the <audio> element's 100% ceiling via a Web Audio gain node.
+function supportsAudioBoost() {
+  return !!(window.AudioContext || window.webkitAudioContext);
 }
 
-async function findSpeakerDeviceId() {
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const speaker = devices.find((d) => d.kind === 'audiooutput' && /speaker/i.test(d.label));
-    return speaker ? speaker.deviceId : null;
-  } catch (err) {
-    console.error('Failed to enumerate audio output devices', err);
-    return null;
+function ensureAudioContext() {
+  if (audioCtx || !supportsAudioBoost()) return;
+  const AudioCtxCtor = window.AudioContext || window.webkitAudioContext;
+  audioCtx = new AudioCtxCtor();
+  gainNode = audioCtx.createGain();
+  gainNode.gain.value = isBoosted ? BOOST_GAIN : 1;
+  gainNode.connect(audioCtx.destination);
+}
+
+function resumeAudioContext() {
+  // Must be kicked off from inside a user gesture (the Start tap) or mobile
+  // browsers leave it suspended and the call stays silent.
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
   }
 }
 
-async function toggleSpeaker() {
-  if (!supportsOutputSwitching()) return;
+function routeRemoteStreamThroughGain(stream) {
+  if (!audioCtx || !gainNode) return false;
+  if (sourceNode) sourceNode.disconnect();
+  sourceNode = audioCtx.createMediaStreamSource(stream);
+  sourceNode.connect(gainNode);
+  remoteAudio.muted = true; // avoid double playback — the gain graph is the real output path
+  return true;
+}
 
-  if (!speakerDeviceId) {
-    speakerDeviceId = await findSpeakerDeviceId();
-    if (!speakerDeviceId) {
-      showToast('No separate loudspeaker output found on this device.');
-      return;
-    }
-  }
-
-  const nextOn = !isSpeakerOn;
-  try {
-    await remoteAudio.setSinkId(nextOn ? speakerDeviceId : '');
-    isSpeakerOn = nextOn;
-    speakerBtn.classList.toggle('is-active', isSpeakerOn);
-    speakerBtn.setAttribute('aria-label', isSpeakerOn ? 'Switch to default audio output' : 'Switch to loudspeaker');
-  } catch (err) {
-    console.error('Failed to switch audio output', err);
-    showToast('Could not switch audio output.');
-  }
+function toggleBoost() {
+  if (!gainNode) return;
+  isBoosted = !isBoosted;
+  gainNode.gain.value = isBoosted ? BOOST_GAIN : 1;
+  speakerBtn.classList.toggle('is-active', isBoosted);
+  speakerBtn.setAttribute('aria-label', isBoosted ? 'Disable volume boost' : 'Boost call volume');
 }
 
 function setMuted(muted) {
@@ -158,7 +165,7 @@ function setControlsForState(next) {
     consentPanel.classList.add('hidden');
     skipBtn.disabled = false;
     muteBtn.disabled = false;
-    speakerBtn.disabled = !supportsOutputSwitching();
+    speakerBtn.disabled = !supportsAudioBoost();
     reportBtn.disabled = false;
     stopBtn.disabled = false;
     chatInput.disabled = false;
@@ -174,6 +181,10 @@ function teardownPeerConnection() {
     pc.ontrack = null;
     pc.close();
     pc = null;
+  }
+  if (sourceNode) {
+    sourceNode.disconnect();
+    sourceNode = null;
   }
   remoteAudio.srcObject = null;
 }
@@ -202,8 +213,13 @@ function createPeerConnection(isOfferer) {
   };
 
   pc.ontrack = (event) => {
-    remoteAudio.srcObject = event.streams[0];
-    playRemoteAudio();
+    const stream = event.streams[0];
+    remoteAudio.srcObject = stream;
+    if (!routeRemoteStreamThroughGain(stream)) {
+      // No Web Audio support (very rare) — fall back to direct playback.
+      remoteAudio.muted = false;
+      playRemoteAudio();
+    }
   };
 
   if (isOfferer) {
@@ -286,6 +302,9 @@ function ensureSocket() {
 async function startSession() {
   if (!consentCheckbox.checked) return;
 
+  ensureAudioContext();
+  resumeAudioContext();
+
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission().catch(() => {});
   }
@@ -342,10 +361,18 @@ function stopSession() {
     localStream = null;
   }
   setMuted(false);
-  isSpeakerOn = false;
-  speakerDeviceId = null;
+  isBoosted = false;
+  if (sourceNode) {
+    sourceNode.disconnect();
+    sourceNode = null;
+  }
+  if (audioCtx) {
+    audioCtx.close().catch(() => {});
+    audioCtx = null;
+    gainNode = null;
+  }
   speakerBtn.classList.remove('is-active');
-  speakerBtn.setAttribute('aria-label', 'Switch to loudspeaker');
+  speakerBtn.setAttribute('aria-label', 'Boost call volume');
   setStatus('Tap Start to find someone to talk to', null);
   setControlsForState('stopped');
 }
@@ -358,7 +385,7 @@ muteBtn.addEventListener('click', () => {
 });
 speakerBtn.addEventListener('click', () => {
   if (speakerBtn.disabled) return;
-  toggleSpeaker();
+  toggleBoost();
 });
 reportBtn.addEventListener('click', reportPartner);
 stopBtn.addEventListener('click', stopSession);
