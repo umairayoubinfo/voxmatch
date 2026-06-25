@@ -1,18 +1,14 @@
 let iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
 
-// Hints, not requirements — unsupported keys (e.g. voiceIsolation on non-Safari
-// browsers) are silently ignored by getUserMedia rather than throwing, since
-// none of these are wrapped in `exact`.
+// Keep this to constraints with broad, well-established hardware support.
+// channelCount/sampleRate/sampleSize/latency/voiceIsolation were tried here
+// and caused getUserMedia to hand back a track with no actual signal on at
+// least one real laptop's audio driver — a silent, non-throwing failure
+// mode, so the try/catch fallback below never even caught it.
 const AUDIO_CONSTRAINTS = {
   echoCancellation: true,
   noiseSuppression: true,
   autoGainControl: true,
-  channelCount: 1,
-  sampleRate: 48000,
-  sampleSize: 16,
-  latency: 0,
-  voiceIsolation: true,
-  suppressLocalAudioPlayback: false,
 };
 
 const statusEl = document.getElementById('status');
