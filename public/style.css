@@ -12,7 +12,9 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: #11131a;
   color: #e9e9f0;
-  overflow: hidden;
+  /* The calling app itself is a fixed-height single screen (.app below).
+     Scrolling is only needed to reach the SEO content section that follows it. */
+  overflow-y: auto;
 }
 
 .app {
@@ -22,6 +24,7 @@ body {
   margin: 0 auto;
   display: flex;
   flex-direction: column;
+  flex: none;
 }
 
 /* ---------- header ---------- */
@@ -345,7 +348,7 @@ body {
   height: 56px;
   border: none;
   border-radius: 28px;
-  background: #7c5cff;
+  background: #1fae6e;
   color: #fff;
   font-size: 1.1rem;
   font-weight: 600;
@@ -418,7 +421,7 @@ body {
   width: 64px;
   height: 64px;
   padding: 18px;
-  background: #ff5c7c;
+  background: #e5484d;
   color: #fff;
 }
 
@@ -440,6 +443,29 @@ body {
 
 .icon-btn.is-muted svg {
   background: #ff5c7c;
+  color: #fff;
+}
+
+/* Speaker toggle shows the opposite icon pair: plain speaker by default,
+   sound-wave icon only once loudspeaker output is actually engaged. */
+#speakerBtn .icon-on {
+  display: none;
+}
+
+#speakerBtn .icon-off {
+  display: block;
+}
+
+#speakerBtn.is-active .icon-on {
+  display: block;
+}
+
+#speakerBtn.is-active .icon-off {
+  display: none;
+}
+
+#speakerBtn.is-active svg {
+  background: #1fae6e;
   color: #fff;
 }
 
@@ -465,5 +491,42 @@ body {
 .toast.hidden {
   opacity: 0;
   pointer-events: none;
+}
+
+/* ---------- SEO content (below the call screen, reached by scrolling) ---------- */
+
+.seo-content {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 32px 20px max(32px, env(safe-area-inset-bottom));
+  border-top: 1px solid #2a2e3f;
+  color: #c7c7d6;
+  line-height: 1.6;
+}
+
+.seo-content h2 {
+  font-size: 1.05rem;
+  color: #7c5cff;
+  margin: 28px 0 8px;
+}
+
+.seo-content h2:first-child {
+  margin-top: 0;
+}
+
+.seo-content h3 {
+  font-size: 0.95rem;
+  color: #e9e9f0;
+  margin: 18px 0 4px;
+}
+
+.seo-content p {
+  margin: 0 0 4px;
+  color: #9b9bb0;
+  font-size: 0.9rem;
+}
+
+.seo-content a {
+  color: #9b8bff;
 }
 </content>

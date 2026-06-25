@@ -9,6 +9,7 @@ const startBtn = document.getElementById('startBtn');
 const inCallControls = document.getElementById('inCallControls');
 const skipBtn = document.getElementById('skipBtn');
 const muteBtn = document.getElementById('muteBtn');
+const speakerBtn = document.getElementById('speakerBtn');
 const reportBtn = document.getElementById('reportBtn');
 const stopBtn = document.getElementById('stopBtn');
 const chatToggleBtn = document.getElementById('chatToggleBtn');
@@ -25,6 +26,48 @@ let pc = null;
 let localStream = null;
 let state = 'idle'; // idle | searching | connected | stopped
 let isMuted = false;
+let isSpeakerOn = false;
+let speakerDeviceId = null;
+
+function supportsOutputSwitching() {
+  return typeof remoteAudio.setSinkId === 'function' &&
+    !!navigator.mediaDevices &&
+    typeof navigator.mediaDevices.enumerateDevices === 'function';
+}
+
+async function findSpeakerDeviceId() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const speaker = devices.find((d) => d.kind === 'audiooutput' && /speaker/i.test(d.label));
+    return speaker ? speaker.deviceId : null;
+  } catch (err) {
+    console.error('Failed to enumerate audio output devices', err);
+    return null;
+  }
+}
+
+async function toggleSpeaker() {
+  if (!supportsOutputSwitching()) return;
+
+  if (!speakerDeviceId) {
+    speakerDeviceId = await findSpeakerDeviceId();
+    if (!speakerDeviceId) {
+      showToast('No separate loudspeaker output found on this device.');
+      return;
+    }
+  }
+
+  const nextOn = !isSpeakerOn;
+  try {
+    await remoteAudio.setSinkId(nextOn ? speakerDeviceId : '');
+    isSpeakerOn = nextOn;
+    speakerBtn.classList.toggle('is-active', isSpeakerOn);
+    speakerBtn.setAttribute('aria-label', isSpeakerOn ? 'Switch to default audio output' : 'Switch to loudspeaker');
+  } catch (err) {
+    console.error('Failed to switch audio output', err);
+    showToast('Could not switch audio output.');
+  }
+}
 
 function setMuted(muted) {
   isMuted = muted;
@@ -53,6 +96,17 @@ function showToast(message) {
   setTimeout(() => toast.classList.add('hidden'), 2500);
 }
 
+function notifyNewMessage(text) {
+  if (chatPanel.classList.contains('hidden')) {
+    showToast('New message');
+  }
+  // The in-page toast only helps while this tab is in front. If the tab is
+  // backgrounded or the phone is locked, fall back to a real OS notification.
+  if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    new Notification('New message', { body: text.slice(0, 120), icon: '/favicon.svg' });
+  }
+}
+
 function addChatLine(text, kind) {
   const line = document.createElement('div');
   line.className = 'chat-line ' + kind;
@@ -78,6 +132,7 @@ function setControlsForState(next) {
     consentPanel.classList.remove('hidden');
     skipBtn.disabled = true;
     muteBtn.disabled = true;
+    speakerBtn.disabled = true;
     reportBtn.disabled = true;
     stopBtn.disabled = true;
     chatInput.disabled = true;
@@ -90,6 +145,7 @@ function setControlsForState(next) {
     consentPanel.classList.add('hidden');
     skipBtn.disabled = true;
     muteBtn.disabled = true;
+    speakerBtn.disabled = true;
     reportBtn.disabled = true;
     stopBtn.disabled = false;
     chatInput.disabled = true;
@@ -102,6 +158,7 @@ function setControlsForState(next) {
     consentPanel.classList.add('hidden');
     skipBtn.disabled = false;
     muteBtn.disabled = false;
+    speakerBtn.disabled = !supportsOutputSwitching();
     reportBtn.disabled = false;
     stopBtn.disabled = false;
     chatInput.disabled = false;
@@ -121,6 +178,18 @@ function teardownPeerConnection() {
   remoteAudio.srcObject = null;
 }
 
+function playRemoteAudio() {
+  // Assigning srcObject happens asynchronously in ontrack, outside the
+  // click that started the call, so mobile autoplay policies can silently
+  // block playback. Retry once on the next tap/click if that happens.
+  const playPromise = remoteAudio.play();
+  if (playPromise && typeof playPromise.catch === 'function') {
+    playPromise.catch(() => {
+      document.addEventListener('pointerdown', () => remoteAudio.play().catch(() => {}), { once: true });
+    });
+  }
+}
+
 function createPeerConnection(isOfferer) {
   pc = new RTCPeerConnection({ iceServers });
 
@@ -134,6 +203,7 @@ function createPeerConnection(isOfferer) {
 
   pc.ontrack = (event) => {
     remoteAudio.srcObject = event.streams[0];
+    playRemoteAudio();
   };
 
   if (isOfferer) {
@@ -199,9 +269,7 @@ function ensureSocket() {
 
   socket.on('chat-message', ({ text }) => {
     addChatLine(text, 'them');
-    if (chatPanel.classList.contains('hidden')) {
-      showToast('New message');
-    }
+    notifyNewMessage(text);
   });
 
   socket.on('online-count', (count) => {
@@ -217,6 +285,10 @@ function ensureSocket() {
 
 async function startSession() {
   if (!consentCheckbox.checked) return;
+
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
 
   try {
     const res = await fetch('/ice-config');
@@ -270,6 +342,10 @@ function stopSession() {
     localStream = null;
   }
   setMuted(false);
+  isSpeakerOn = false;
+  speakerDeviceId = null;
+  speakerBtn.classList.remove('is-active');
+  speakerBtn.setAttribute('aria-label', 'Switch to loudspeaker');
   setStatus('Tap Start to find someone to talk to', null);
   setControlsForState('stopped');
 }
@@ -279,6 +355,10 @@ skipBtn.addEventListener('click', skipSession);
 muteBtn.addEventListener('click', () => {
   if (muteBtn.disabled) return;
   setMuted(!isMuted);
+});
+speakerBtn.addEventListener('click', () => {
+  if (speakerBtn.disabled) return;
+  toggleSpeaker();
 });
 reportBtn.addEventListener('click', reportPartner);
 stopBtn.addEventListener('click', stopSession);
