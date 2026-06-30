@@ -33,8 +33,12 @@ sign-off before the change goes in, not a passing mention in a PR description.
 7. **`.env` stays gitignored.** Secrets are supplied only via environment
    variables — never hardcoded, never committed.
 8. **No public launch without HTTPS and a dedicated (non-shared) TURN
-   credential.** The free OpenRelay shared TURN credentials in `.env.example`
-   are for local development only.
+   credential.** `/ice-config` (`lib/cloudflareTurn.js`) supports Cloudflare
+   Realtime TURN (dedicated, generous free tier) when
+   `CLOUDFLARE_TURN_KEY_ID`/`CLOUDFLARE_TURN_API_TOKEN` are set — that's the
+   intended production path. The static `TURN_URLS`/`TURN_USERNAME`/
+   `TURN_CREDENTIAL` fallback (currently OpenRelay's free shared credentials
+   in `.env.example`) is for local development only.
 
 ## What's already implemented
 
@@ -57,9 +61,9 @@ These are real and intentional — see `README.md` / `STATUS.md` for the full
 writeup. Don't treat their existence as something to quietly "fix" by
 weakening something else above; they require their own dedicated work:
 
-- TURN currently uses OpenRelay's free *shared* credentials — fine for dev,
-  not for real traffic.
-- Terms of Service text is a placeholder, not lawyer-reviewed.
+- TURN supports Cloudflare Realtime TURN (dedicated) once its env vars are
+  set; until then it falls back to OpenRelay's free *shared* credentials —
+  fine for dev, not for real traffic.
 - Matchmaking queue is single-process in-memory — no multi-instance support.
 - No automated audio/content moderation — only behavioral signal (reports).
 - Clearing cookies (not just `localStorage`) still resets a user's identity,

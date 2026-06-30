@@ -25,7 +25,7 @@ Includes skip/next, text chat, and a report/ban moderation pipeline.
 | Terms of Service page | Done (placeholder text) | `public/terms.html` — **not lawyer-reviewed, see caveat below** |
 | Hardened anonymous identity | Done | Signed httpOnly cookie issued server-side; clearing `localStorage` no longer resets a ban (clearing cookies still does) |
 | Rate limiting | Done | `find-partner` capped 20/min, `report` capped 5/10min, per identity+IP, via Redis |
-| Dynamic ICE config | Done | `/ice-config` endpoint serves STUN+TURN from env vars; client fetches it at runtime |
+| Dynamic ICE config | Done | `/ice-config` mints short-lived Cloudflare Realtime TURN credentials server-side (`lib/cloudflareTurn.js`) when `CLOUDFLARE_TURN_KEY_ID`/`CLOUDFLARE_TURN_API_TOKEN` are set, falling back to static `TURN_URLS` env vars otherwise; client fetches it at runtime |
 | Admin report review | Done | `GET /admin/reports`, `POST /admin/unban/:id` — bearer-token protected, JSON only, no UI |
 | Health check | Done | `GET /healthz` — pings Redis, for use as a host health-check endpoint |
 | Security headers | Done | `helmet` middleware |
@@ -38,35 +38,41 @@ Includes skip/next, text chat, and a report/ban moderation pipeline.
 
 ## Can it be launched right now?
 
-**It runs locally end-to-end now. Not yet ready for a real/public launch — three items remain.**
+**Deployed and running on Render. Not yet sized/configured for real public traffic — see below.**
 
 ### Resolved
 - **`REDIS_URL`** — connected to a live Upstash instance; `/healthz` confirms it.
-- **TURN server** — configured with OpenRelay's free shared credentials
-  (`TURN_URLS`/`TURN_USERNAME`/`TURN_CREDENTIAL` in `.env`). Fine for testing,
-  but see caveat below before relying on it for real traffic.
+- **TURN server (code side)** — `/ice-config` now mints short-lived credentials
+  from Cloudflare Realtime TURN (`lib/cloudflareTurn.js`) once
+  `CLOUDFLARE_TURN_KEY_ID`/`CLOUDFLARE_TURN_API_TOKEN` are set — a dedicated
+  provider with a generous free tier (1,000 GB/month relayed), not a shared
+  pool. **Code is ready; the Cloudflare account/app and Render env vars still
+  need to be set up** — see "Still needed" below.
+- **Terms of Service** — reviewed/updated since the placeholder version
+  flagged here previously.
 - **End-to-end flow test** — driven via two headless Chromium tabs (fake mic
   input): matchmaking, WebRTC audio (`ontrack` fired both directions), text
   chat relay, and skip/requeue all verified working against the real server
   and real Redis.
 
-### Strongly recommended before any real/public launch
-- **TURN is on OpenRelay's free *shared* credentials**, not a dedicated/paid
-  server. These are publicly known, rate-limited, and can be throttled or
-  revoked without notice. Fine for development; swap for a paid TURN tier
-  (e.g. [metered.ca](https://www.metered.ca/)) or self-hosted coturn before
-  treating this as production.
-- **Not deployed anywhere yet** — currently only runs on `localhost`. To put it
-  on the internet you'd push this repo to GitHub and deploy to Render (or
-  similar) as described in `README.md`. `getUserMedia` requires HTTPS for any
-  non-localhost origin, which Render provides automatically.
-- **Terms of Service text is a placeholder, not lawyer-reviewed.** This app is
-  in the same risk category as Omegle/Chatroulette (anonymous stranger voice
-  chat) — both of which had serious legal/regulatory exposure over abuse and
-  CSAM. The ToS, consent gate, and report/ban pipeline built here are a
-  reasonable technical baseline, not a substitute for actual legal review.
-  **Get a lawyer to review `public/terms.html` and the moderation/retention
-  approach before treating this as a real public launch.**
+### Still needed before any real/public launch
+- **Cloudflare Realtime TURN account setup** — sign up, create a Realtime TURN
+  app, and set `CLOUDFLARE_TURN_KEY_ID`/`CLOUDFLARE_TURN_API_TOKEN` in Render's
+  environment variables. Until these are set, `/ice-config` falls back to
+  whatever's in `TURN_URLS`/`TURN_USERNAME`/`TURN_CREDENTIAL` — currently
+  OpenRelay's free *shared* credentials, which are publicly known and can be
+  throttled or revoked without notice.
+- **Render is still on the Free instance type.** It sleeps after 15 min idle
+  (cold start ~1 min on the next request) and has 0.1 CPU / 512MB RAM —
+  documented as fine for early/low traffic, not for "click Start, talk now" at
+  any real volume. Upgrade to Starter (~$7/mo) via Render's dashboard before a
+  real launch; Standard (~$25/mo) if `npm run load-test` shows Starter
+  struggling under your expected concurrency.
+- **Upstash Redis is still on the free tier** (500K commands/month). Matchmaking
+  costs ~2-3 Redis commands per `find-partner` click — a moderately active
+  userbase can exceed the free monthly budget well before Render or TURN
+  becomes the bottleneck. Watch the Upstash dashboard; pay-as-you-go overage
+  is cheap (~$0.20/100K commands) if/when you cross it.
 
 ### Lower priority, not blocking an early/small launch
 - **Multi-instance scaling** — matchmaking queue is single-process in-memory;
@@ -79,6 +85,8 @@ Includes skip/next, text chat, and a report/ban moderation pipeline.
 
 ## Summary
 The code is feature-complete for a "minimum viable, anonymous, cheap-to-host"
-random voice chat app per the plan we agreed on, and now runs and has been
-verified end-to-end locally. Before a real public launch: move off the free
-shared TURN credentials, deploy with HTTPS, and get the ToS legally reviewed.
+random voice chat app, deployed and verified end-to-end against real
+infrastructure. What's left before real public traffic is account/config
+work, not code: set up the Cloudflare Realtime TURN app and its env vars,
+upgrade Render off the Free instance type, and keep an eye on the Upstash
+free-tier command budget as usage grows.

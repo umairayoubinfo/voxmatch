@@ -36,13 +36,21 @@ infrastructure:
    - For local development only, you can instead point `REDIS_URL` at any
      Redis-compatible instance you already have running.
 
-2. **TURN server — [Metered.ca](https://www.metered.ca/tools/openrelay/)** (or
-   any other TURN provider)
-   - Sign up free → create a TURN app → copy the TURN URL, username, and
-     credential it gives you.
-   - Without this, calls between users on restrictive networks (symmetric NAT,
-     some corporate/mobile firewalls) will fail to connect — STUN alone isn't
-     enough for everyone.
+2. **TURN — [Cloudflare Realtime](https://developers.cloudflare.com/realtime/turn/)**
+   (recommended) or any other TURN provider
+   - Sign up for Cloudflare → create a Realtime TURN app → copy the Turn Key
+     ID and API token it gives you. `lib/cloudflareTurn.js` mints short-lived
+     credentials from these server-side; nothing client-facing is static.
+   - Generous free tier (1,000 GB/month relayed) — comfortably covers a real
+     launch without paying anything, see `STATUS.md` for the math.
+   - Without TURN configured at all, calls between users on restrictive
+     networks (symmetric NAT, some corporate/mobile firewalls) will fail to
+     connect — STUN alone isn't enough for everyone.
+   - If you'd rather use a different/static-credential TURN provider (e.g.
+     [Metered.ca](https://www.metered.ca/tools/openrelay/)), set `TURN_URLS`/
+     `TURN_USERNAME`/`TURN_CREDENTIAL` instead — see Environment variables
+     below. That path is used automatically whenever the Cloudflare vars are
+     unset.
 
 3. **Hosting — [Render](https://render.com)** (or Fly.io/Railway)
    - Push this repo to GitHub.
@@ -63,7 +71,8 @@ Copy `.env.example` to `.env` and fill in:
 | `REDIS_URL` | Connection string from Upstash (or your own Redis) |
 | `COOKIE_SECRET` | Random secret signing the identity cookie — generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
 | `ADMIN_SECRET` | Bearer token required to call `/admin/*` — generate the same way |
-| `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` | From your TURN provider |
+| `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | From your Cloudflare Realtime TURN app — preferred TURN config, see above |
+| `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` | Fallback TURN config (any static-credential provider), used only when the Cloudflare vars above are unset |
 
 ## Run locally
 
@@ -107,6 +116,21 @@ There's no admin UI — these are plain JSON endpoints, intentionally minimal.
 
 - `GET /healthz` — pings Redis, returns 200 if healthy, 503 if Redis is
   unreachable. Point your host's health check here.
+
+## Load testing
+
+`scripts/loadtest.js` simulates N concurrent users hitting matchmaking/signal/
+chat against a real running server, then reports connect/match-latency/error
+stats:
+
+```
+npm run load-test -- --url=https://your-app.onrender.com --clients=1000
+```
+
+It exercises the matchmaking server and Redis-backed rate limits — it does
+**not** exercise real WebRTC audio or TURN relay (audio never passes through
+this server), so it can't tell you whether your TURN provider holds up under
+load, only whether matchmaking/signaling does.
 
 ## Limitations / known gaps
 

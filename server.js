@@ -14,6 +14,7 @@ const { checkRateLimit } = require('./lib/rateLimit');
 const { createLocalRateLimiter } = require('./lib/localRateLimit');
 const { createAvoidPairs } = require('./lib/avoidPairs');
 const { safeCompare } = require('./lib/auth');
+const { fetchIceServers } = require('./lib/cloudflareTurn');
 
 const PORT = process.env.PORT || 3000;
 const REPORT_BLOCK_THRESHOLD = 3;
@@ -41,7 +42,14 @@ function getClientIp(socket) {
   return socket.handshake.address;
 }
 
-app.get('/ice-config', (req, res) => {
+app.get('/ice-config', async (req, res) => {
+  const cloudflareIceServers = await fetchIceServers(logger);
+  if (cloudflareIceServers) {
+    return res.json({ iceServers: cloudflareIceServers });
+  }
+
+  // Fallback: static STUN + optional legacy TURN env vars — used when
+  // Cloudflare isn't configured (e.g. local dev) or its API is unreachable.
   const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
   if (process.env.TURN_URLS) {
     iceServers.push({
@@ -154,8 +162,29 @@ function leaveRoom(socket, notifyPartner) {
   }
 }
 
+// Throttled (leading + trailing edge): emits immediately on the first
+// connect/disconnect after idle, then coalesces any further churn into at
+// most one broadcast per ONLINE_COUNT_INTERVAL_MS instead of fan-out-ing to
+// every socket on every single connect/disconnect.
+const ONLINE_COUNT_INTERVAL_MS = 2000;
+let onlineCountCooldown = false;
+let onlineCountPending = false;
+
 function broadcastOnlineCount() {
+  if (onlineCountCooldown) {
+    onlineCountPending = true;
+    return;
+  }
   io.emit('online-count', io.sockets.sockets.size);
+  onlineCountCooldown = true;
+  const timer = setTimeout(() => {
+    onlineCountCooldown = false;
+    if (onlineCountPending) {
+      onlineCountPending = false;
+      broadcastOnlineCount();
+    }
+  }, ONLINE_COUNT_INTERVAL_MS);
+  timer.unref();
 }
 
 io.on('connection', (socket) => {
